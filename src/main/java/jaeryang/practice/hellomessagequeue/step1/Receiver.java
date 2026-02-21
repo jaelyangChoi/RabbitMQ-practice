@@ -1,4 +1,4 @@
-package jaeryang.practice.hellomessagequeue.step0;
+package jaeryang.practice.hellomessagequeue.step1;
 
 import org.springframework.stereotype.Component;
 
