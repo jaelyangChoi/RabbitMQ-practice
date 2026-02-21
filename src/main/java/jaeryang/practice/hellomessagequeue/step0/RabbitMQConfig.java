@@ -1,5 +1,6 @@
 package jaeryang.practice.hellomessagequeue.step0;
 
+import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -11,13 +12,13 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class RabbitMQConfig {
 	// 큐 네임 설정
-	public static final String QUEUE_NAME = "hello-queue";
+	public static final String QUEUE_NAME = "WorkQueue";
 
 	//Spring이 시작될 때 RabbitMQ 서버에 “이 큐를 생성하라”라고 선언하기 위해
 	@Bean
 	public Queue queue() {
 		//QUEUE_NAME은 메시지가 쌓이고 처리될 큐의 이름을 정의
-		return new Queue(QUEUE_NAME, false); //영속화 여부
+		return new Queue(QUEUE_NAME, true); //영속화 여부. true: 서버 셧다운 시 데이터 보관
 	}
 
 
@@ -35,12 +36,13 @@ public class RabbitMQConfig {
 		container.setConnectionFactory(connectionFactory);
 		container.setQueueNames(QUEUE_NAME);
 		container.setMessageListener(listenerAdapter);
+		container.setAcknowledgeMode(AcknowledgeMode.AUTO); //default이나 명시
 		return container;
 	}
 
 	//MessageListenerAdapter: 메시지를 처리할 리스너 어댑터
 	@Bean
-	public MessageListenerAdapter listenerAdapter(Receiver receiver) {
-		return new MessageListenerAdapter(receiver, "receiveMessage");
+	public MessageListenerAdapter listenerAdapter(WorkQueueConsumer workQueueTask) {
+		return new MessageListenerAdapter(workQueueTask, "workQueueTask");
 	}
 }
