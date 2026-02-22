@@ -1,4 +1,4 @@
-package jaeryang.practice.hellomessagequeue.step5;
+package jaeryang.practice.hellomessagequeue.step6;
 
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
@@ -19,5 +19,10 @@ public class LogConsumer {
 	@RabbitListener(queues = RabbitMQConfig.INFO_QUEUE)
 	public void consumeInfo(String message) {
 		System.out.println("[INFO]를 받음 : " + message);
+	}
+
+	@RabbitListener(queues = RabbitMQConfig.ALL_LOG_QUEUE)
+	public void consumeAllLogs(String message) {
+		System.out.println("[All LOGS]를 받음 : " + message);
 	}
 }
