@@ -1,4 +1,4 @@
-package jaeryang.practice.hellomessagequeue.step3;
+package jaeryang.practice.hellomessagequeue.step4;
 
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;

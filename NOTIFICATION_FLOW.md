@@ -1,77 +1,58 @@
-# Notification 처리 흐름 정리
+# Notification / News 처리 흐름 정리
 
-이 문서는 프로젝트(HelloMessageQueue)의 STOMP/WebSocket + RabbitMQ 기반 알림 처리 흐름을 엔드투엔드로 정리합니다. 클라이언트가 구독/전송할 때 메시지가 어떻게 처리되어 브라우저로 전달되는지, 관련 코드 위치와 핵심 훅(method signatures), Lombok 적용 권장 등을 포함합니다.
+주요 포인트 요약
+- STOMP 애플리케이션 엔드포인트: `/app/subscribe` (서버의 `@MessageMapping("/subscribe")`)
+- WebSocket 엔드포인트: `/ws` (SockJS)
+- SimpleBroker 접두사(구독): `/topic/*` (예: `/topic/java`, `/topic/spring`, `/topic/vue`)
+- RabbitMQ 교환: `newsExchange`(FanoutExchange). 세 개의 큐(`javaQueue`, `springQueue`, `vueQueue`)가 바인딩되어 있음
+- 전달 경로(두 가지)
+  1. STOMP → 애플리케이션(`NewsController`) → RabbitMQ(`NewsPublisher`) → 큐 → `NewsSubscriber` → WebSocket(`/topic/...`) 브로드캐스트
+  2. HTTP REST → `NewsPublisher` → (위와 동일)
 
-요약
-- 프로젝트는 두 경로로 클라이언트에 알림을 전달합니다:
-  1. STOMP -> 애플리케이션(@MessageMapping) -> SimpleBroker(/topic/...) 브로드캐스트
-  2. REST -> RabbitMQ(exchange) 발행 -> @RabbitListener(큐) 수신 -> SimpleBroker(/topic/...) 브로드캐스트
-- 현재 토픽 이름은 `/topic/notifications`(복수)로 통일되어 있습니다.
+핵심 설정 요약 (`WebSocketConfig`)
+- registry.enableSimpleBroker("/topic")
+- registry.setApplicationDestinationPrefixes("/app")
+- registry.addEndpoint("/ws").setAllowedOriginPatterns("*").withSockJS();
 
-체크리스트
-- [x] WebSocket(STOMP) 설정 위치: `src/main/java/jaeryang/practice/hellomessagequeue/step3/WebSocketConfig.java`
-- [x] STOMP 핸들러: `src/main/java/jaeryang/practice/hellomessagequeue/step3/StompController.java`
-- [x] REST 발행자: `src/main/java/jaeryang/practice/hellomessagequeue/step3/NotificationController.java`
-- [x] RabbitMQ 발행자: `src/main/java/jaeryang/practice/hellomessagequeue/step3/NotificationPublisher.java`
-- [x] RabbitMQ 설정: `src/main/java/jaeryang/practice/hellomessagequeue/step3/RabbitMQConfig.java`
-- [x] RabbitMQ 구독자: `src/main/java/jaeryang/practice/hellomessagequeue/step3/NotificationSubscriber.java`
-- [x] 클라이언트(템플릿): `src/main/resources/templates/index.html`
+시퀀스 A — STOMP → 서버 → RabbitMQ → WebSocket 브로드캐스트 (구체)
+1. 클라이언트가 STOMP로 서버에 메시지 전송
+   - destination: `/app/subscribe`
+   - 헤더: `newsType` (예: `java`, `spring`, `vue`) — `NewsController`에서 `@Header("newsType") String newsType`으로 수신
+2. 서버: `NewsController.handleSubscribe(newsType)` 실행
+   - 코드 위치: `src/main/java/jaeryang/practice/hellomessagequeue/step4/NewsController.java`
+   - 메서드 시그니처:
+     ```java
+     @MessageMapping("/subscribe")
+     public void handleSubscribe(@Header("newsType") String newsType)
+     ```
+   - 동작: `String newsMessage = newsPublisher.publish(newsType);` 호출
+3. `NewsPublisher.publish(newsType)`
+   - 위치: `src/main/java/jaeryang/practice/hellomessagequeue/step4/NewsPublisher.java`
+   - 내부: `rabbitTemplate.convertAndSend(RabbitMQConfig.FANOUT_EXCHANGE_FOR_NEWS, news, message);`
+   - 반환값: 발행된 `message` 문자열
+4. RabbitMQ
+   - 교환: `newsExchange` (FanoutExchange)
+   - 바인딩된 큐: `javaQueue`, `springQueue`, `vueQueue`
+   - Fanout 특성: 라우팅 키를 무시하고 교환에 바인딩된 모든 큐로 메시지를 전송함
+5. `NewsSubscriber`가 각 큐에서 메시지 수신
+   - 위치: `src/main/java/jaeryang/practice/hellomessagequeue/step4/NewsSubscriber.java`
+   - 메서드 예:
+     ```java
+     @RabbitListener(queues = RabbitMQConfig.JAVA_QUEUE)
+     public void javaNews(String message) {
+         simpMessagingTemplate.convertAndSend("/topic/java", message);
+     }
+     // springNews -> /topic/spring, vueNews -> /topic/vue
+     ```
+6. SimpleBroker가 `/topic/java`, `/topic/spring`, `/topic/vue`을 구독한 브라우저 클라이언트에게 메시지 전송
 
-1) 핵심 설정 파일
+결과: STOMP로 `/app/subscribe`을 호출하면 내부적으로 RabbitMQ에 발행되고, FanoutExchange의 특성 때문에 세 개의 큐에 동일 메시지가 들어가며 결국 세 개 토픽 모두에 브로드캐스트됩니다.
+다만, 클라이언트는 구독한 토픽에 대한 메시지만 수신합니다.<br>
+(사실 해당 예제는 Topic Exchange가 적합하나, 아직 학습 전이라 Fanout Exchange로 구현되어 있음)
 
-- `WebSocketConfig` (요약)
-  - registry.enableSimpleBroker("/topic")
-  - registry.setApplicationDestinationPrefixes("/app")
-  - registerStompEndpoints: `/ws` (SockJS)
-
-  파일: `src/main/java/jaeryang/practice/hellomessagequeue/step3/WebSocketConfig.java`
-
-2) 클라이언트(브라우저)에서의 동작(핵심)
-- index.html (요약)
-  - SockJS로 `/ws` 연결
-  - 구독: `stompClient.subscribe('/topic/notifications', callback)`
-  - 전송: `stompClient.send('/app/send', {}, JSON.stringify({ message }))`
-  - 파일: `src/main/resources/templates/index.html`
-
-3) 시퀀스 A — 클라이언트 STOMP 메시지(/app/send) → 브로드캐스트
-- 클라이언트: `stompClient.send('/app/send', {}, JSON.stringify({ message }))`
-- 서버 라우팅: `/app` 접두사 때문에 요청이 애플리케이션으로 전달
-- 핸들러: `StompController`
-  - 파일: `src/main/java/jaeryang/practice/hellomessagequeue/step3/StompController.java`
-  - 메서드 시그니처:
-    ```java
-    @MessageMapping("/send")
-    public void sendMessage(NotificationMessage notificationMessage)
-    ```
-  - 현재 구현: `simpMessagingTemplate.convertAndSend("/topic/notifications", message);`
-- 브로드캐스트: SimpleBroker가 `/topic/notifications`을 구독한 클라이언트에게 메시지 전송
-
-4) 시퀀스 B — REST -> RabbitMQ -> Subscriber -> 브로드캐스트
-- REST 엔드포인트: `POST /notifications`
-  - 컨트롤러: `NotificationController`
-  - 메서드 시그니처:
-    ```java
-    @PostMapping
-    public String sendNotification(@RequestBody String message)
-    ```
-  - 동작: `publisher.publish(message);`
-- RabbitMQ Publisher: `NotificationPublisher`
-  - 메서드 시그니처:
-    ```java
-    public void publish(String message) {
-        rabbitTemplate.convertAndSend(RabbitMQConfig.FANOUT_EXCHANGE, "", message);
-    }
-    ```
-  - exchange 타입: `FanoutExchange` (모든 바인딩된 큐로 브로드캐스트)
-- RabbitMQ 구성: `RabbitMQConfig`
-  - `QUEUE_NAME = "notificationQueue"`
-  - `FANOUT_EXCHANGE = "notificationExchange"`
-  - Binding: `BindingBuilder.bind(notificationQueue).to(fanoutExchange)`
-- Subscriber: `NotificationSubscriber`
-  - 애노테이션: `@RabbitListener(queues = RabbitMQConfig.QUEUE_NAME)`
-  - 메서드 시그니처:
-    ```java
-    public void subscribe(String message)
-    ```
-  - 동작: `simpMessagingTemplate.convertAndSend(CLIENT_URL, message);` // CLIENT_URL = "/topic/notifications"
-- 결과: SimpleBroker가 최종적으로 `/topic/notifications` 구독자들에게 메시지를 전달
+시퀀스 B — HTTP REST → RabbitMQ → WebSocket 브로드캐스트
+1. 클라이언트(또는 외부)가 HTTP POST 호출
+   - 엔드포인트: `POST /news/api/publish?newsType=java`
+   - 컨트롤러: `NewsRestController.publishNews(String newsType)`
+   - 이 메서드는 `newsPublisher.publishAPI(newsType)` 호출
+2. 이후의 흐름은 시퀀스 A의 RabbitMQ → Subscriber → WebSocket 브로드캐스트와 동일
