@@ -1,4 +1,4 @@
-package jaeryang.practice.hellomessagequeue.step7;
+package jaeryang.practice.hellomessagequeue.step8;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
